@@ -13,7 +13,7 @@ import yt_dlp
 class Config:
     proxy_enabled = False
     proxy_address = ""
-    max_lines = 5  # 新增调试行数限制 (0=全部翻译)
+    max_lines = 50  # 新增调试行数限制 (0=全部翻译)
     debug_video_file = ''#'Anne-Laure Le Cunff - How to Design Tiny Experiments Like a Scientist @neuranne.webm'
     debug_subtitle_file = ''#'Anne-Laure Le Cunff - How to Design Tiny Experiments Like a Scientist @neuranne.srt'
 
@@ -43,18 +43,27 @@ def get_safe_filename(url, template='%(title)s.%(ext)s'):
         print(f"错误：{str(e)}")
         return None
 
-def download_video(url: str, video_file: str):
-    # 配置参数：仅下载视频（不下载音频）
+def download_video(url: str, title: str):
+    # 配置参数：下载并合并最佳音视频流
     ydl_opts = {
-        'format': 'bestvideo',  # 选择最佳视频质量
-        'outtmpl': f'cache/{video_file}',  # 文件名格式：视频标题.扩展名
-        'quiet': False,  # 显示下载进度
-        'noprogress': False,    # 禁用进度条（避免与控制台输出冲突）
-        'ignoreerrors': 'only_download'  # 跳过错误视频
+        'format': 'bestvideo+bestaudio',  # 同时获取最佳视频和音频
+        'merge_output_format': 'mp4',     # 强制输出MP4格式
+        'outtmpl': f'cache/{video_file}.mp4',
+        'quiet': False,
+        'noprogress': False,
+        'ignoreerrors': 'only_download',
+        'embedthumbnail': True,          # 自动嵌入视频缩略图
+        'verbose': True                 # 显示FFmpeg合并过程
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    except yt_dlp.utils.DownloadError as e:
+        if "ffmpeg" in str(e).lower():
+            print("错误：未检测到 FFmpeg，请通过 brew install ffmpeg 安装")
+        else:
+            raise e
 
 def download_subtitle(url: str, title: str):
     """智能字幕下载"""
@@ -138,15 +147,13 @@ def download_subtitle(url: str, title: str):
 def dedupe_subtitle(subtitle_file: str, title: str):
     if subtitle_file:
         try:
-            # 原始文件路径（从参数获取）
-            orig_orig_path = os.path.join('cache', subtitle_file)
             # 新原始文件路径（添加 _orig 后缀）
             orig_path = os.path.join('cache', f"{title}_orig.srt")
             # 去重后文件路径
             dedupe_path = os.path.join('cache', f"{title}_dedupe.srt")
             
             # 先重命名原始文件
-            shutil.move(orig_orig_path, orig_path)
+            shutil.move(os.path.join('cache', subtitle_file), orig_path)
             
             # 处理重命名后的文件
             subs = pysrt.open(orig_path)
@@ -307,7 +314,7 @@ def main():
             print("已翻译字幕")
 
             # 下载视频
-            download_video(url, video_file)
+            download_video(url, title)
         except Exception as e:
             print(f"处理失败：{e}")
 
