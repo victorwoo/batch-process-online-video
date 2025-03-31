@@ -46,9 +46,9 @@ def get_safe_filename(url, template='%(title)s.%(ext)s'):
 def download_video(url: str, title: str):
     # 配置参数：下载并合并最佳音视频流
     ydl_opts = {
-        'format': 'bestvideo+bestaudio',  # 同时获取最佳视频和音频
-        'merge_output_format': 'mp4',     # 强制输出MP4格式
-        'outtmpl': f'cache/{video_file}.mp4',
+        'format': 'bestvideo+bestaudio',
+        'merge_output_format': 'mp4',
+        'outtmpl': f'cache/{title}.mp4',  # 修正变量名错误
         'quiet': False,
         'noprogress': False,
         'ignoreerrors': 'only_download',
@@ -59,11 +59,13 @@ def download_video(url: str, title: str):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+            return f'{title}.mp4'
     except yt_dlp.utils.DownloadError as e:
         if "ffmpeg" in str(e).lower():
             print("错误：未检测到 FFmpeg，请通过 brew install ffmpeg 安装")
         else:
             raise e
+        return None
 
 def download_subtitle(url: str, title: str):
     """智能字幕下载"""
@@ -277,6 +279,34 @@ def translate_subtitle(input_srt: str, title: str):
         'bilingual': os.path.join('cache', bilingual_srt)
     }
 
+def merge_subtitle(video_file: str, all_subs: dict, output_file: str):
+    """合并多语言字幕到视频"""
+    cmd = [
+        'ffmpeg',
+        '-i', os.path.join('cache', video_file),  # 主视频文件
+        '-i', all_subs['cn'],    # 中文字幕
+        '-i', all_subs['en'],    # 英文字幕
+        '-i', all_subs['bilingual'],  # 双语字幕
+        '-map', '0:v',          # 视频流
+        '-map', '0:a',          # 音频流
+        '-map', '1',            # 中文字幕流
+        '-map', '2',            # 英文字幕流
+        '-map', '3',            # 双语字幕流
+        '-c:v', 'copy',         # 保持视频编码
+        '-c:a', 'copy',         # 保持音频编码
+        '-c:s', 'mov_text',     # 字幕编码格式
+        '-metadata:s:s:0', 'language=chi',     # 中文字幕元数据
+        '-metadata:s:s:1', 'language=eng',     # 英文字幕元数据
+        '-metadata:s:s:2', 'language=bilingual',  # 双语字幕元数据
+        os.path.join('cache', output_file)
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+        print(f"多语言字幕合并完成: {output_file}")
+    except subprocess.CalledProcessError as e:
+        print(f"字幕合并失败，请检查FFmpeg版本: {e}")
+        raise e
+
 def main():
     print("开始执行")
     # 创建目录
@@ -307,14 +337,21 @@ def main():
 
             # 清理多行字幕
             deduped_subtitle_file = dedupe_subtitle(subtitle_file, title)
-            print("已清理多行字幕")
+            print(f"已清理多行字幕 {deduped_subtitle_file}")
 
             # 翻译字幕
             all_subs = translate_subtitle(deduped_subtitle_file, title)
-            print("已翻译字幕")
+            print(f"已翻译字幕 {all_subs
+            }")
 
             # 下载视频
-            download_video(url, title)
+            download_video_file = download_video(url, title)
+            print(f"已下载视频 {download_video_file}")
+
+            # 合并字幕
+            merged_output = f"{title}_with_subs.mp4"
+            merge_subtitle(download_video_file, all_subs, merged_output)
+            print(f"最终视频已生成: {merged_output}")
         except Exception as e:
             print(f"处理失败：{e}")
 
