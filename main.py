@@ -9,20 +9,35 @@ import shutil
 import ollama
 import yt_dlp
 import ffmpeg
+import mysql.connector
+from datetime import datetime
+
+#print(os.environ['BPOV_DB_USER'])
 
 # 硬编码配置
 class Config:
-    proxy_enabled = False
-    proxy_address = ""
+    proxy_enabled = True
+    proxy_address = "127.0.0.1:7987"
     max_lines = 50  # 新增调试行数限制 (0=全部翻译)
-    debug_video_file = ''#'Anne-Laure Le Cunff - How to Design Tiny Experiments Like a Scientist @neuranne.webm'
-    debug_subtitle_file = ''#'Anne-Laure Le Cunff - How to Design Tiny Experiments Like a Scientist @neuranne.srt'
+    debug_video_file = ''#'1000 Ideas In Your Pocket.mp4'
+    debug_subtitle_file = ''#'1000 Ideas In Your Pocket_orig.srt'
+    debug_json_file = ''#'1000 Ideas In Your Pocket_orig.json'
+
+# 数据库配置（需要用户自行填写）
+DB_CONFIG = {
+    'host': 'home.vichamp.com',
+    # 'user': os.environ['BPOV_DB_USER'],          # 从环境变量读取
+    # 'password': os.environ['BPOV_DB_PASSWORD'], # 从环境变量读取
+    'user': 'smms',          # 从环境变量读取
+    'password': 'Xk7#Qp@2!Lm', # 从环境变量读取
+    'database': 'youtube',
+    'port': 3306
+}
 
 def load_tasks(task_file: str) -> List[str]:
     """直接从tasks.txt读取URL"""
     with open(task_file, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
-
 
 def get_safe_filename(url, template='%(title)s.%(ext)s'):
     ydl_opts = {
@@ -39,11 +54,94 @@ def get_safe_filename(url, template='%(title)s.%(ext)s'):
             info = ydl.extract_info(url, download=False)
             # 生成转义后的文件名
             filename = ydl.prepare_filename(info)
-            return filename
+            return filename, info
     except yt_dlp.utils.DownloadError as e:
         print(f"错误：{str(e)}")
         return None
 
+# 新增日期格式转换函数
+def format_date(date_str):
+    return datetime.strptime(date_str, "%Y%m%d").date()
+
+# 新增数据库保存函数
+def save_to_database(info: dict):
+    """保存视频元数据到数据库"""
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        # 插入频道数据
+        channel_sql = """
+        INSERT INTO channels (
+            channel_id, channel_name, channel_url,
+            uploader_name, uploader_id, uploader_url
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            channel_name = VALUES(channel_name),
+            uploader_name = VALUES(uploader_name)
+        """
+        channel_values = (
+            info['channel_id'],
+            info.get('channel', ''),
+            info.get('channel_url', ''),
+            info.get('uploader', ''),
+            info.get('uploader_id', ''),
+            info.get('uploader_url', '')
+        )
+        cursor.execute(channel_sql, channel_values)
+
+        # 插入视频数据
+        video_sql = """
+        INSERT INTO videos (
+            video_id, channel_id, title, fulltitle, description,
+            webpage_url, thumbnail_url, upload_date, release_date, language
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            title = VALUES(title),
+            description = VALUES(description)
+        """
+        video_values = (
+            info['id'],
+            info['channel_id'],
+            info.get('fulltitle', ''),
+            info.get('fulltitle', ''),
+            info.get('description', ''),
+            info.get('webpage_url', ''),
+            info.get('thumbnail', ''),
+            format_date(info['upload_date']),
+            format_date(info['release_date']),
+            info.get('language', 'en')
+        )
+        cursor.execute(video_sql, video_values)
+
+        # 处理标签数据
+        if 'tags' in info:
+            tag_insert_sql = "INSERT IGNORE INTO tags (tag_name) VALUES (%s)"
+            for tag in info['tags']:
+                cursor.execute(tag_insert_sql, (tag,))
+
+            tag_select_sql = "SELECT tag_id FROM tags WHERE tag_name = %s"
+            video_tag_sql = "INSERT IGNORE INTO video_tags (video_id, tag_id) VALUES (%s, %s)"
+            for tag in info['tags']:
+                cursor.execute(tag_select_sql, (tag,))
+                if result := cursor.fetchone():
+                    cursor.execute(video_tag_sql, (info['id'], result[0]))
+
+        conn.commit()
+        print("元数据已保存至数据库")
+
+    except mysql.connector.Error as err:
+        print(f"数据库错误: {err}")
+        conn.rollback()
+    except Exception as e:
+        print(f"保存数据失败: {str(e)}")
+        conn.rollback()
+    finally:
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
+
+# 在 download_video 函数中添加调用
 def download_video(url: str, title: str):
     # 配置参数：下载并合并最佳音视频流
     ydl_opts = {
@@ -324,11 +422,14 @@ def main():
     for url in load_tasks('tasks.txt'):
         try:
             # 获取预期下载的文件名
-            video_file = (
-                Config.debug_video_file
-                if Config.debug_video_file
-                else get_safe_filename(url)
-            )
+            if Config.debug_video_file:
+                video_file = Config.debug_video_file
+                info = None
+                with open(Config.debug_json_file, 'r', encoding='utf-8') as file:
+                    info = json.load(file)
+
+            else:
+                video_file, info = get_safe_filename(url)
             print(f"video_file: {video_file}")
 
             # 获取安全标题、视频扩展名
@@ -360,6 +461,8 @@ def main():
             merged_output = f"{title}_with_subs.mp4"
             merge_subtitle(download_video_file, all_subs, merged_output)
             print(f"最终视频已生成: {merged_output}")
+
+            save_to_database(info)
         except Exception as e:
             print(f"处理失败：{e}")
 
