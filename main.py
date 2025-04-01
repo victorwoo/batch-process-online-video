@@ -17,7 +17,7 @@ from datetime import datetime
 # 硬编码配置
 class Config:
     proxy_enabled = True
-    proxy_address = "127.0.0.1:7987"
+    proxy_address = "127.0.0.1:7897"
     max_lines = 50  # 新增调试行数限制 (0=全部翻译)
     debug_video_file = ''#'1000 Ideas In Your Pocket.mp4'
     debug_subtitle_file = ''#'1000 Ideas In Your Pocket_orig.srt'
@@ -47,6 +47,9 @@ def get_safe_filename(url, template='%(title)s.%(ext)s'):
         'restrictfilenames': False,  # 关键参数
         'windowsfilenames': True  # 保持默认值（True）
     }
+    # 新增代理配置
+    if Config.proxy_enabled:
+        ydl_opts['proxy'] = Config.proxy_address
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -70,62 +73,41 @@ def save_to_database(info: dict):
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
 
-        # 插入频道数据
-        channel_sql = """
-        INSERT INTO channels (
-            channel_id, channel_name, channel_url,
-            uploader_name, uploader_id, uploader_url
-        ) VALUES (%s, %s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            channel_name = VALUES(channel_name),
-            uploader_name = VALUES(uploader_name)
-        """
-        channel_values = (
-            info['channel_id'],
-            info.get('channel', ''),
-            info.get('channel_url', ''),
-            info.get('uploader', ''),
-            info.get('uploader_id', ''),
-            info.get('uploader_url', '')
-        )
-        cursor.execute(channel_sql, channel_values)
-
-        # 插入视频数据
+        # 删除原频道插入部分，合并到视频表
+        
+        # 新视频数据插入（包含频道信息）
         video_sql = """
         INSERT INTO videos (
-            video_id, channel_id, title, fulltitle, description,
-            webpage_url, thumbnail_url, upload_date, release_date, language
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            id, description, tags, channel_id, channel_url,
+            webpage_url, channel, uploader, uploader_id,
+            uploader_url, upload_date, fulltitle, 
+            release_date, language, thumbnail
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
-            title = VALUES(title),
-            description = VALUES(description)
+            description = VALUES(description),
+            tags = VALUES(tags),
+            channel = VALUES(channel)
         """
         video_values = (
             info['id'],
-            info['channel_id'],
-            info.get('fulltitle', ''),
-            info.get('fulltitle', ''),
             info.get('description', ''),
+            json.dumps(info.get('tags', [])),  # 转换列表为JSON字符串
+            info['channel_id'],
+            info.get('channel_url', ''),
             info.get('webpage_url', ''),
-            info.get('thumbnail', ''),
+            info.get('channel', ''),
+            info.get('uploader', ''),
+            info.get('uploader_id', ''),
+            info.get('uploader_url', ''),
             format_date(info['upload_date']),
+            info.get('fulltitle', ''),
             format_date(info['release_date']),
-            info.get('language', 'en')
+            info.get('language', 'en'),
+            info.get('thumbnail', '')
         )
         cursor.execute(video_sql, video_values)
 
-        # 处理标签数据
-        if 'tags' in info:
-            tag_insert_sql = "INSERT IGNORE INTO tags (tag_name) VALUES (%s)"
-            for tag in info['tags']:
-                cursor.execute(tag_insert_sql, (tag,))
-
-            tag_select_sql = "SELECT tag_id FROM tags WHERE tag_name = %s"
-            video_tag_sql = "INSERT IGNORE INTO video_tags (video_id, tag_id) VALUES (%s, %s)"
-            for tag in info['tags']:
-                cursor.execute(tag_select_sql, (tag,))
-                if result := cursor.fetchone():
-                    cursor.execute(video_tag_sql, (info['id'], result[0]))
+        # 删除原标签处理逻辑，已整合到视频表的tags字段
 
         conn.commit()
         print("元数据已保存至数据库")
@@ -147,13 +129,16 @@ def download_video(url: str, title: str):
     ydl_opts = {
         'format': 'bestvideo+bestaudio',
         'merge_output_format': 'mp4',
-        'outtmpl': f'cache/{title}.mp4',  # 修正变量名错误
+        'outtmpl': f'cache/{title}.mp4',
         'quiet': False,
         'noprogress': False,
         'ignoreerrors': 'only_download',
         'embedthumbnail': True,          # 自动嵌入视频缩略图
         'verbose': True                 # 显示FFmpeg合并过程
     }
+    # 新增代理配置
+    if Config.proxy_enabled:
+        ydl_opts['proxy'] = Config.proxy_address
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -176,6 +161,9 @@ def download_subtitle(url: str, title: str):
             '--dump-single-json',
             url
         ]
+        # 新增代理参数
+        if Config.proxy_enabled:
+            cmd += ['--proxy', Config.proxy_address]
 
         # 打印可直接执行的命令字符串，以便在终端中调试
         quoted_cmd = ' '.join(shlex.quote(arg) for arg in cmd)
