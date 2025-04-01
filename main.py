@@ -8,6 +8,7 @@ import shlex
 import shutil
 import ollama
 import yt_dlp
+import ffmpeg
 
 # 硬编码配置
 class Config:
@@ -279,33 +280,40 @@ def translate_subtitle(input_srt: str, title: str):
         'bilingual': os.path.join('cache', bilingual_srt)
     }
 
+
 def merge_subtitle(video_file: str, all_subs: dict, output_file: str):
-    """合并多语言字幕到视频"""
-    cmd = [
-        'ffmpeg',
-        '-i', os.path.join('cache', video_file),  # 主视频文件
-        '-i', all_subs['cn'],    # 中文字幕
-        '-i', all_subs['en'],    # 英文字幕
-        '-i', all_subs['bilingual'],  # 双语字幕
-        '-map', '0:v',          # 视频流
-        '-map', '0:a',          # 音频流
-        '-map', '1',            # 中文字幕流
-        '-map', '2',            # 英文字幕流
-        '-map', '3',            # 双语字幕流
-        '-c:v', 'copy',         # 保持视频编码
-        '-c:a', 'copy',         # 保持音频编码
-        '-c:s', 'mov_text',     # 字幕编码格式
-        '-metadata:s:s:0', 'language=chi',     # 中文字幕元数据
-        '-metadata:s:s:1', 'language=eng',     # 英文字幕元数据
-        '-metadata:s:s:2', 'language=bilingual',  # 双语字幕元数据
-        os.path.join('cache', output_file)
-    ]
+    """使用ffmpeg库合并多语言字幕到视频"""
     try:
-        subprocess.run(cmd, check=True)
+        # 构建输入流
+        input_video = ffmpeg.input(os.path.join('cache', video_file))
+        input_cn = ffmpeg.input(all_subs['cn'])
+        input_en = ffmpeg.input(all_subs['en'])
+        input_bilingual = ffmpeg.input(all_subs['bilingual'])
+
+        # 构建输出流
+        output = ffmpeg.output(
+            input_video['v'],  # 视频流
+            input_video['a'],  # 音频流
+            input_cn['s'],  # 中文字幕流
+            input_en['s'],  # 英文字幕流
+            input_bilingual['s'],  # 双语字幕流
+            os.path.join('cache', output_file),
+            vcodec='copy',  # 保持视频编码
+            acodec='copy',  # 保持音频编码
+            scodec='mov_text',  # 字幕编码格式
+            **{
+                'metadata:s:s:0': 'language=chi',
+                'metadata:s:s:1': 'language=eng',
+                'metadata:s:s:2': 'language=bilingual'
+            }
+        )
+
+        # 执行合并
+        output.run(overwrite_output=True)
         print(f"多语言字幕合并完成: {output_file}")
-    except subprocess.CalledProcessError as e:
-        print(f"字幕合并失败，请检查FFmpeg版本: {e}")
-        raise e
+    except ffmpeg.Error as e:
+        print(f"字幕合并失败: {e.stderr.decode('utf8')}")
+        raise RuntimeError(e.stderr)
 
 def main():
     print("开始执行")
