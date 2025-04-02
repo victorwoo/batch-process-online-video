@@ -45,7 +45,8 @@ DB_CONFIG = {
 def load_tasks(task_file: str) -> List[str]:
     """直接从tasks.txt读取URL"""
     with open(task_file, 'r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
+        return [line.strip() for line in f 
+                if line.strip() and not line.startswith('* ')]  # 新增跳过逻辑
 
 # 在 load_tasks 函数下方添加以下函数
 def query_if_exists(url: str) -> bool:
@@ -132,7 +133,8 @@ def save_to_database(info: dict):
             info.get('uploader_url', ''),
             format_date(info['upload_date']),
             info.get('fulltitle', ''),
-            format_date(info['release_date']),
+            # format_date(info['release_date']),
+            format_date(info['release_date']) if 'release_date' in info else None,
             info.get('language', 'en'),
             info.get('thumbnail', ''),
             datetime.now()
@@ -140,13 +142,15 @@ def save_to_database(info: dict):
         cursor.execute(video_sql, video_values)
         conn.commit()
         print("元数据已保存至数据库")
-
+        return True
     except mysql.connector.Error as err:
         print(f"数据库错误: {err}")
         conn.rollback()
+        return False
     except Exception as e:
         print(f"保存数据失败: {str(e)}")
         conn.rollback()
+        return False
     finally:
         if conn.is_connected():
             cursor.close()
@@ -419,6 +423,19 @@ def merge_subtitle(input_video_file_path: str,
         print(f"字幕合并失败: {e.stderr.decode('utf8')}")
         raise RuntimeError(e.stderr)
 
+def update_task_file(url: str):
+    """在任务文件中的URL前添加星号标记"""
+    task_file = 'tasks.txt'
+    try:
+        with open(task_file, 'r+', encoding='utf-8') as f:
+            lines = [f'* {line}' if line.strip() == url else line 
+                    for line in f.readlines()]
+            f.seek(0)
+            f.writelines(lines)
+            f.truncate()
+    except Exception as e:
+        print(f"更新任务文件失败: {str(e)}")
+
 def main():
     print("开始执行")
     # 创建目录
@@ -434,6 +451,7 @@ def main():
             # 查询数据库中是否已有这条记录
             if query_if_exists(url):
                 print(f"跳过已存在的任务：{url}")
+                update_task_file(url)
                 continue
 
             # 获取预期下载的文件名
@@ -457,30 +475,44 @@ def main():
             os.makedirs(data_dir, exist_ok=True)
 
             # 将 JSON 文件写入到数据目录下
-            target_json_path = os.path.join(data_dir, f'{safe_title}.json')
-            if Config.debug_use_mock_json:
-                shutil.copy(Config.debug_json_file, target_json_path)
-            else:
-                with open(target_json_path, 'w', encoding='utf-8') as file:
-                    json.dump(video_info, file, ensure_ascii=False, indent=4)
+            test_path = os.path.join(data_dir, f'{safe_title}.srt')
+            if not os.path.exists(test_path):
+                target_json_path = os.path.join(data_dir, f'{safe_title}.json')
+                if Config.debug_use_mock_json:
+                    shutil.copy(Config.debug_json_file, target_json_path)
+                else:
+                    with open(target_json_path, 'w', encoding='utf-8') as file:
+                        json.dump(video_info, file, ensure_ascii=False, indent=4)
 
             # 字幕处理逻辑
-            if Config.debug_use_mock_subtitle:
-                target_subtitle_file = f'{safe_title}_orig.srt'
-                target_subtitle_path = os.path.join(data_dir, target_subtitle_file)
-                shutil.copy(Config.debug_subtitle_file, target_subtitle_path)
-                orig_subtitle_file = target_subtitle_file
+            test_path = os.path.join(data_dir, f'{safe_title}_orig.srt')
+            if os.path.exists(test_path):
+                orig_subtitle_file =f'{safe_title}_orig.srt'
             else:
-                orig_subtitle_file = download_subtitle(url, video_info, safe_title, data_dir)
-            print(f'orig_subtitle_file: {orig_subtitle_file}')
+                if Config.debug_use_mock_subtitle:
+                    target_subtitle_file = f'{safe_title}_orig.srt'
+                    orig_subtitle_file = target_subtitle_file
+                    target_subtitle_path = os.path.join(data_dir, target_subtitle_file)
+                    shutil.copy(Config.debug_subtitle_file, target_subtitle_path)
+                else:
+                    orig_subtitle_file = download_subtitle(url, video_info, safe_title, data_dir)
+                print(f'orig_subtitle_file: {orig_subtitle_file}')
 
             # 清理多行字幕
             deduped_subtitle_file = dedupe_subtitle(orig_subtitle_file, safe_title, data_dir)
             print(f"已清理多行字幕 {deduped_subtitle_file}")
 
-            # 翻译字幕
-            all_subs = translate_subtitle(deduped_subtitle_file, safe_title, data_dir)
-            print(f"已翻译字幕 {all_subs}")
+            test_path = os.path.join(data_dir, f'{safe_title}.en+cn.srt')
+            if os.path.exists(test_path):
+                all_subs = {
+                    'cn': os.path.join(data_dir, f'{safe_title}.cn.srt'),
+                    'en': os.path.join(data_dir, f'{safe_title}.en.srt'),
+                    'bilingual': os.path.join(data_dir, f'{safe_title}.en+cn.srt')
+                }
+            else:
+                # 翻译字幕
+                all_subs = translate_subtitle(deduped_subtitle_file, safe_title, data_dir)
+                print(f"已翻译字幕 {all_subs}")
 
             # 下载视频
             if Config.debug_use_mock_video:
@@ -504,6 +536,9 @@ def main():
 
             # 保存元数据到数据库
             save_to_database(video_info)
+
+            # 新增标记已完成的URL
+            update_task_file(url)
         except Exception as e:
             print(f"处理失败：{e}")
 
