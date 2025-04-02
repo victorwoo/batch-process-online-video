@@ -16,9 +16,9 @@ from datetime import datetime
 
 # 硬编码配置
 class Config:
-    proxy_enabled = True
+    proxy_enabled = False
     proxy_address = "127.0.0.1:7897"
-    max_lines = 50  # 新增调试行数限制 (0=全部翻译)
+    max_lines = 0  # 新增调试行数限制 (0=全部翻译)
 
     debug_use_mock_json = False
     debug_use_mock_subtitle = False
@@ -46,6 +46,30 @@ def load_tasks(task_file: str) -> List[str]:
     """直接从tasks.txt读取URL"""
     with open(task_file, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
+
+# 在 load_tasks 函数下方添加以下函数
+def query_if_exists(url: str) -> bool:
+    """检查 URL 是否已存在于数据库"""
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        query = """SELECT COUNT(*) FROM videos 
+                WHERE webpage_url = %s 
+                AND download_time IS NOT NULL"""  # 新增非空条件
+        cursor.execute(query, (url,))
+        
+        # 获取查询结果
+        count = cursor.fetchone()[0]
+        return count > 0
+        
+    except mysql.connector.Error as err:
+        print(f"数据库查询错误: {err}")
+        return False  # 出错时默认继续处理
+    finally:
+        if 'conn' in locals() and conn.is_connected():
+            cursor.close()
+            conn.close()
 
 def get_safe_filename(url, template='%(title)s.%(ext)s'):
     ydl_opts = {
@@ -81,20 +105,19 @@ def save_to_database(info: dict):
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
 
-        # 删除原频道插入部分，合并到视频表
-        
-        # 新视频数据插入（包含频道信息）
+        # 新视频数据插入
         video_sql = """
         INSERT INTO videos (
             id, description, tags, channel_id, channel_url,
             webpage_url, channel, uploader, uploader_id,
             uploader_url, upload_date, fulltitle, 
-            release_date, language, thumbnail
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            release_date, language, thumbnail, download_time
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             description = VALUES(description),
             tags = VALUES(tags),
-            channel = VALUES(channel)
+            channel = VALUES(channel),
+            download_time = VALUES(download_time)
         """
         video_values = (
             info['id'],
@@ -111,12 +134,10 @@ def save_to_database(info: dict):
             info.get('fulltitle', ''),
             format_date(info['release_date']),
             info.get('language', 'en'),
-            info.get('thumbnail', '')
+            info.get('thumbnail', ''),
+            datetime.now()
         )
         cursor.execute(video_sql, video_values)
-
-        # 删除原标签处理逻辑，已整合到视频表的tags字段
-
         conn.commit()
         print("元数据已保存至数据库")
 
@@ -408,6 +429,13 @@ def main():
     # 处理任务
     for url in load_tasks('tasks.txt'):
         try:
+            print(f'--- 开始处理 {url} ---')
+
+            # 查询数据库中是否已有这条记录
+            if query_if_exists(url):
+                print(f"跳过已存在的任务：{url}")
+                continue
+
             # 获取预期下载的文件名
             if Config.debug_use_mock_json:
                 safe_title = Config.debug_safe_title
