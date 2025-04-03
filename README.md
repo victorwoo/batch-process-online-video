@@ -14,7 +14,7 @@
 
 1. 克隆仓库：
 ```bash
-git clone https://github.com/yourusername/batch-process-online-video.git
+git clone https://github.com/victorwoo/batch-process-online-video.git
 cd batch-process-online-video
 ```
 
