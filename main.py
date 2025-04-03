@@ -11,8 +11,7 @@ import yt_dlp
 import ffmpeg
 import mysql.connector
 from datetime import datetime
-
-#print(os.environ['BPOV_DB_USER'])
+from dotenv import load_dotenv
 
 # 硬编码配置
 class Config:
@@ -31,13 +30,12 @@ class Config:
     debug_subtitle_file = 'example/1000 Ideas In Your Pocket_orig.srt'
     debug_json_file = 'example/1000 Ideas In Your Pocket_formatted.json'
 
-# 数据库配置（需要用户自行填写）
+# 数据库配置
+load_dotenv("~/.env")  # 加载用户目录的 .env 文件
 DB_CONFIG = {
     'host': 'home.vichamp.com',
-    # 'user': os.environ['BPOV_DB_USER'],          # 从环境变量读取
-    # 'password': os.environ['BPOV_DB_PASSWORD'], # 从环境变量读取
-    'user': 'smms',          # 从环境变量读取
-    'password': 'Xk7#Qp@2!Lm', # 从环境变量读取
+    'user': os.environ.get("BPOV_DB_USER"),
+    'password': os.environ.get("BPOV_DB_PASSWORD"),
     'database': 'youtube',
     'port': 3306
 }
@@ -194,10 +192,12 @@ def download_subtitle(url: str, video_info: dict, safe_title: str, data_dir: str
         selected = None
         
         # 优先级选择逻辑
-        for lang in ['zh', 'en']:
-            if lang in subs:
-                selected = {'lang': lang, 'is_auto': False}
-                break
+        # for lang in ['zh', 'en']:
+        #     if lang in subs:
+        #         selected = {'lang': lang, 'is_auto': False}
+        #         break
+        if 'en' in subs:
+            selected = {'lang': 'en', 'is_auto': False}
         if not selected and 'en' in auto_subs:
             selected = {'lang': 'en', 'is_auto': True}
         
@@ -438,6 +438,7 @@ def update_task_file(url: str):
 
 def main():
     print("开始执行")
+
     # 创建目录
     video_dir = 'videos'
     os.makedirs('videos', exist_ok=True)

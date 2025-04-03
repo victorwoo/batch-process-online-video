@@ -6,12 +6,9 @@
 
 - 支持从 YouTube 下载视频和字幕
 - 自动处理字幕格式，提取有效字幕
-- 支持使用 Google Translate API 翻译字幕
 - 生成双语字幕视频
 - 支持从 YouTube 频道批量获取视频链接
-- 使用 SQLite 数据库存储元数据
 - 支持代理服务器配置
-- 支持单元测试
 
 ## 安装
 
@@ -34,13 +31,17 @@ source .venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
+4. 安装 Ollama 和 LLM
+
+安装 Ollama，然后执行以下命令安装 LLM：
+
+```bash
+ollama pull qwen2.5:7b-instruct
+```
+
 ## 配置
 
-1. 复制 `config.yaml.example` 为 `config.yaml`
-2. 编辑 `config.yaml` 文件，填入必要的配置信息：
-   - Google Translate API 密钥
-   - 代理服务器设置（如果需要）
-   - 输出目录设置
+在项目根目录下放置一个 `.env` 文件，内容参考 `example/example.env`
 
 ## 使用方法
 
@@ -52,30 +53,4 @@ pip install -r requirements.txt
 python -m batch_process_online_video.main
 ```
 
-3. 运行测试：
-```bash
-pytest
-```
-
 ## 目录结构
-
-```
-batch-process-online-video/
-├── batch_process_online_video/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── models.py
-│   ├── video_downloader.py
-│   ├── subtitle_processor.py
-│   └── main.py
-├── tests/
-│   └── test_channel_extractor.py
-├── config.yaml
-├── tasks.txt
-├── requirements.txt
-└── README.md
-```
-
-## 许可证
-
-MIT License
